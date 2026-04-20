@@ -14,7 +14,6 @@ def ask_choice(prompt, valid_options):
 
 
 def get_player_move(game):
-    """Demande et valide le coup du joueur humain."""
     valid_moves = set(game.get_valid_moves())
     while True:
         try:
@@ -34,6 +33,10 @@ def get_player_move(game):
         except ValueError:
             print("  Entrez deux nombres entiers.")
 
+
+# ------------------------------------------------------------------
+# Mode joueur vs IA
+# ------------------------------------------------------------------
 
 def play_game():
     game = UltimateTTT()
@@ -91,10 +94,174 @@ def _announce_result(game, human_player):
     print("=" * 40 + "\n")
 
 
+# ------------------------------------------------------------------
+# Mode bataille IA vs IA
+# ------------------------------------------------------------------
+
+def _play_one_battle(depth_a, depth_b, a_starts):
+    """
+    Joue une partie IA-A vs IA-B.
+    Retourne (gagnant, x_wins, o_wins) où gagnant = 'A', 'B' ou 'Nul'.
+    Si a_starts : IA-A joue X (joueur 1), IA-B joue O (joueur 2).
+    Sinon l'inverse.
+    """
+    game = UltimateTTT()
+    player_a = 1 if a_starts else 2
+    player_b = 2 if a_starts else 1
+
+    while not game.is_game_over():
+        if game.current_player == player_a:
+            row, col = get_best_move(game, depth=depth_a)
+        else:
+            row, col = get_best_move(game, depth=depth_b)
+        game.make_move(row, col)
+
+    x_wins = game.count_local_wins(1)
+    o_wins = game.count_local_wins(2)
+
+    if game.global_winner == player_a:
+        winner = "A"
+    elif game.global_winner == player_b:
+        winner = "B"
+    elif game.global_winner == 0:
+        a_count = x_wins if a_starts else o_wins
+        b_count = o_wins if a_starts else x_wins
+        winner = "A" if a_count > b_count else ("B" if b_count > a_count else "Nul")
+    else:
+        winner = "Nul"
+
+    return winner, x_wins, o_wins
+
+
+def _points(winner, is_fastest):
+    """Calcule les points selon le barème du sujet."""
+    if winner == "A":
+        return (4 if is_fastest else 3, 0)
+    elif winner == "B":
+        return (0, 4 if is_fastest else 3)
+    else:
+        return (1 if is_fastest else 0, 1 if is_fastest else 0)
+
+
+def battle_mode():
+    print("\n" + "=" * 40)
+    print("     BATAILLE IA vs IA")
+    print("=" * 40)
+
+    print("\nProfondeur IA-A (actuelle) :", AI_DEPTH)
+    try:
+        depth_b = int(input("  Profondeur IA-B (ex: 2, 3, 4) : ").strip())
+    except ValueError:
+        depth_b = AI_DEPTH
+
+    try:
+        nb_combats = int(input("  Nombre de combats (1 combat = 2 parties) : ").strip())
+    except ValueError:
+        nb_combats = 3
+
+    show_boards = ask_choice("  Afficher les grilles ? [o/n] : ", ["o", "n"]) == "o"
+
+    print(f"\n  IA-A depth={AI_DEPTH}  vs  IA-B depth={depth_b}")
+    print(f"  {nb_combats} combat(s) — {nb_combats * 2} partie(s) au total\n")
+
+    total_pts_a = 0
+    total_pts_b = 0
+    wins_a = wins_b = draws = 0
+
+    for combat in range(1, nb_combats + 1):
+        print(f"--- Combat {combat}/{nb_combats} ---")
+
+        import time
+
+        # Partie 1 : A commence (joue X)
+        t0 = time.time()
+        w1, x1, o1 = _play_one_battle(AI_DEPTH, depth_b, a_starts=True)
+        t1 = time.time() - t0
+        fastest1 = t1 < 60  # toujours vrai pour depth ≤ 4
+
+        pts_a1, pts_b1 = _points(w1, fastest1)
+        total_pts_a += pts_a1
+        total_pts_b += pts_b1
+        print(f"  Partie 1 (A=X) : {_result_str(w1, x1, o1)}  [{t1:.1f}s]  pts A={pts_a1} B={pts_b1}")
+
+        if show_boards:
+            _replay_and_show(AI_DEPTH, depth_b, a_starts=True)
+
+        # Partie 2 : B commence (joue X)
+        t0 = time.time()
+        w2, x2, o2 = _play_one_battle(AI_DEPTH, depth_b, a_starts=False)
+        t2 = time.time() - t0
+
+        pts_a2, pts_b2 = _points(w2, True)
+        total_pts_a += pts_a2
+        total_pts_b += pts_b2
+        print(f"  Partie 2 (B=X) : {_result_str(w2, x2, o2)}  [{t2:.1f}s]  pts A={pts_a2} B={pts_b2}")
+
+        if show_boards:
+            _replay_and_show(AI_DEPTH, depth_b, a_starts=False)
+
+        # Stats de la partie
+        for w in (w1, w2):
+            if w == "A":
+                wins_a += 1
+            elif w == "B":
+                wins_b += 1
+            else:
+                draws += 1
+
+    print("\n" + "=" * 40)
+    print("  RÉSULTATS FINAUX")
+    print("=" * 40)
+    print(f"  IA-A (depth={AI_DEPTH}) : {wins_a} victoires  {total_pts_a} pts")
+    print(f"  IA-B (depth={depth_b})  : {wins_b} victoires  {total_pts_b} pts")
+    print(f"  Nuls : {draws}")
+    if total_pts_a > total_pts_b:
+        print("  → IA-A remporte le tournoi !")
+    elif total_pts_b > total_pts_a:
+        print("  → IA-B remporte le tournoi !")
+    else:
+        print("  → Égalité parfaite !")
+    print("=" * 40 + "\n")
+
+
+def _result_str(winner, x_wins, o_wins):
+    if winner in ("A", "B"):
+        return f"Victoire {winner}"
+    return f"Nul (X:{x_wins} O:{o_wins})"
+
+
+def _replay_and_show(depth_a, depth_b, a_starts):
+    """Rejoue la partie en affichant chaque coup."""
+    game = UltimateTTT()
+    player_a = 1 if a_starts else 2
+    print_board(game)
+    while not game.is_game_over():
+        if game.current_player == player_a:
+            row, col = get_best_move(game, depth=depth_a)
+            print(f"  IA-A joue : col {col+1} ligne {row+1}")
+        else:
+            row, col = get_best_move(game, depth=depth_b)
+            print(f"  IA-B joue : col {col+1} ligne {row+1}")
+        game.make_move(row, col)
+        print_board(game)
+
+
+# ------------------------------------------------------------------
+# Menu principal
+# ------------------------------------------------------------------
+
 if __name__ == "__main__":
     while True:
-        play_game()
-        again = ask_choice("Rejouer ? [o/n] : ", ["o", "n"])
-        if again == "n":
+        print("\n" + "=" * 40)
+        print("  [1] Jouer contre l'IA")
+        print("  [2] Bataille IA vs IA")
+        print("  [q] Quitter")
+        choice = ask_choice("  Choix : ", ["1", "2", "q"])
+
+        if choice == "1":
+            play_game()
+        elif choice == "2":
+            battle_mode()
+        else:
             print("À bientôt !")
             break
