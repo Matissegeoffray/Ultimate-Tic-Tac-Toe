@@ -2,14 +2,24 @@ import math
 
 
 # ---------------------------------------------------------------------------
+# Poids par défaut de l'heuristique
+# ---------------------------------------------------------------------------
+
+DEFAULT_WEIGHTS = {
+    "local_win":      10,  # morpion gagné
+    "global_center":   5,  # morpion central du plateau global
+    "two_in_row":      3,  # 2 pièces alignées sans blocage dans un morpion
+    "one_in_row":      1,  # 1 pièce en développement
+    "local_center":    1,  # case centrale d'un morpion
+    "freedom":         2,  # liberté de choix (active_board=None)
+}
+
+
+# ---------------------------------------------------------------------------
 # Heuristique
 # ---------------------------------------------------------------------------
 
-def _score_lines(vals, player):
-    """
-    Pour une grille 3x3 (vals[r][c]), calcule un score basé sur les lignes.
-    Récompense les alignements à 2 (sans blocage), pénalise ceux de l'adversaire.
-    """
+def _score_lines(vals, player, w_two, w_one):
     opponent = 3 - player
     score = 0
     lines = [
@@ -27,65 +37,58 @@ def _score_lines(vals, player):
         p_count = cells.count(player)
         o_count = cells.count(opponent)
 
-        if o_count == 0:           # ligne non bloquée par l'adversaire
+        if o_count == 0:
             if p_count == 2:
-                score += 3         # menace immédiate
+                score += w_two
             elif p_count == 1:
-                score += 1         # développement
-        if p_count == 0:           # ligne non bloquée par le joueur
+                score += w_one
+        if p_count == 0:
             if o_count == 2:
-                score -= 3
+                score -= w_two
             elif o_count == 1:
-                score -= 1
+                score -= w_one
     return score
 
 
-def heuristic(game, ai_player):
+def heuristic(game, ai_player, weights=None):
     """
     Évalue la position du point de vue de ai_player.
-    Retourne un entier : positif = bon pour l'IA, négatif = mauvais.
+    weights : dict de poids (utilise DEFAULT_WEIGHTS si None).
     """
+    w = weights if weights is not None else DEFAULT_WEIGHTS
     opponent = 3 - ai_player
     score = 0
 
-    # 1. Sous-plateaux gagnés (objectif principal)
-    score += game.count_local_wins(ai_player) * 10
-    score -= game.count_local_wins(opponent)  * 10
+    # 1. Morpions gagnés
+    score += game.count_local_wins(ai_player) * w["local_win"]
+    score -= game.count_local_wins(opponent)  * w["local_win"]
 
-    # 2. Sous-plateau central du plateau global (pivot stratégique)
+    # 2. Morpion central du plateau global
     center_winner = game.local_winners[1][1]
     if center_winner == ai_player:
-        score += 5
+        score += w["global_center"]
     elif center_winner == opponent:
-        score -= 5
+        score -= w["global_center"]
 
     # 3. Analyse de chaque sous-plateau non terminé
     for br in range(3):
         for bc in range(3):
             if game.local_winners[br][bc] != 0:
                 continue
-
             vals = game.get_local_values(br, bc)
-
-            # Menaces à 2 et développement à 1
-            score += _score_lines(vals, ai_player)
-
-            # Case centrale du sous-plateau
+            score += _score_lines(vals, ai_player, w["two_in_row"], w["one_in_row"])
             center = vals[1][1]
             if center == ai_player:
-                score += 1
+                score += w["local_center"]
             elif center == opponent:
-                score -= 1
+                score -= w["local_center"]
 
-    # 4. Liberté du prochain joueur
-    # Si le joueur courant (qui vient de jouer) a forcé l'adversaire dans un
-    # sous-plateau terminé, l'adversaire joue librement (mauvais pour l'IA).
-    # La liberté de choix (active_board=None) est un avantage pour le joueur courant.
+    # 4. Liberté de choix
     if game.active_board is None:
         if game.current_player == ai_player:
-            score += 2   # l'IA joue librement = bon pour elle
+            score += w["freedom"]
         else:
-            score -= 2   # l'adversaire joue librement = mauvais pour l'IA
+            score -= w["freedom"]
 
     return score
 
@@ -94,18 +97,12 @@ def heuristic(game, ai_player):
 # Minimax avec élagage Alpha-Beta
 # ---------------------------------------------------------------------------
 
-def minimax(game, depth, alpha, beta, maximizing, ai_player):
-    """
-    Minimax avec élagage Alpha-Beta.
-    maximizing=True  → c'est le tour de l'IA (on maximise).
-    maximizing=False → c'est le tour de l'adversaire (on minimise).
-    """
+def minimax(game, depth, alpha, beta, maximizing, ai_player, weights=None):
     if game.is_game_over():
         winner = game.global_winner
         if winner == ai_player:
             return 10000
         elif winner == 0:
-            # Fin par remplissage : on compte les morpions gagnés
             ai_wins  = game.count_local_wins(ai_player)
             opp_wins = game.count_local_wins(3 - ai_player)
             return (ai_wins - opp_wins) * 100
@@ -113,7 +110,7 @@ def minimax(game, depth, alpha, beta, maximizing, ai_player):
             return -10000
 
     if depth == 0:
-        return heuristic(game, ai_player)
+        return heuristic(game, ai_player, weights)
 
     moves = game.get_valid_moves()
 
@@ -122,29 +119,29 @@ def minimax(game, depth, alpha, beta, maximizing, ai_player):
         for row, col in moves:
             child = game.copy()
             child.make_move(row, col)
-            val = minimax(child, depth - 1, alpha, beta, False, ai_player)
+            val = minimax(child, depth - 1, alpha, beta, False, ai_player, weights)
             best = max(best, val)
             alpha = max(alpha, best)
             if beta <= alpha:
-                break   # coupure bêta
+                break
         return best
     else:
         best = math.inf
         for row, col in moves:
             child = game.copy()
             child.make_move(row, col)
-            val = minimax(child, depth - 1, alpha, beta, True, ai_player)
+            val = minimax(child, depth - 1, alpha, beta, True, ai_player, weights)
             best = min(best, val)
             beta = min(beta, best)
             if beta <= alpha:
-                break   # coupure alpha
+                break
         return best
 
 
-def get_best_move(game, depth=3):
+def get_best_move(game, depth=3, weights=None):
     """
     Retourne le meilleur coup (row, col) pour le joueur courant.
-    depth : profondeur de recherche (3 = bon compromis vitesse/qualité).
+    weights : poids de l'heuristique (DEFAULT_WEIGHTS si None).
     """
     ai_player = game.current_player
     moves = game.get_valid_moves()
@@ -160,7 +157,7 @@ def get_best_move(game, depth=3):
     for row, col in moves:
         child = game.copy()
         child.make_move(row, col)
-        val = minimax(child, depth - 1, alpha, beta, False, ai_player)
+        val = minimax(child, depth - 1, alpha, beta, False, ai_player, weights)
         if val > best_val:
             best_val  = val
             best_move = (row, col)

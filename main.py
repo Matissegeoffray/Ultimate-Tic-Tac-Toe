@@ -1,6 +1,6 @@
 from game import UltimateTTT
 from display import print_board
-from ai import get_best_move
+from ai import get_best_move, DEFAULT_WEIGHTS
 
 AI_DEPTH = 3  # profondeur Minimax (augmenter pour une IA plus forte, mais plus lente)
 
@@ -98,7 +98,7 @@ def _announce_result(game, human_player):
 # Mode bataille IA vs IA
 # ------------------------------------------------------------------
 
-def _play_one_battle(depth_a, depth_b, a_starts):
+def _play_one_battle(depth_a, depth_b, a_starts, weights_a=None, weights_b=None):
     """
     Joue une partie IA-A vs IA-B.
     Retourne (gagnant, x_wins, o_wins) où gagnant = 'A', 'B' ou 'Nul'.
@@ -111,9 +111,9 @@ def _play_one_battle(depth_a, depth_b, a_starts):
 
     while not game.is_game_over():
         if game.current_player == player_a:
-            row, col = get_best_move(game, depth=depth_a)
+            row, col = get_best_move(game, depth=depth_a, weights=weights_a)
         else:
-            row, col = get_best_move(game, depth=depth_b)
+            row, col = get_best_move(game, depth=depth_b, weights=weights_b)
         game.make_move(row, col)
 
     x_wins = game.count_local_wins(1)
@@ -143,25 +143,52 @@ def _points(winner, is_fastest):
         return (1 if is_fastest else 0, 1 if is_fastest else 0)
 
 
+def _ask_weights(name):
+    """Demande les poids pour une IA. Entrée vide = valeur par défaut."""
+    print(f"\n  Poids de {name} (Entrée = garder la valeur par défaut) :")
+    weights = dict(DEFAULT_WEIGHTS)
+    labels = {
+        "local_win":     f"  Morpion gagné          [{weights['local_win']}] : ",
+        "global_center": f"  Morpion central global  [{weights['global_center']}] : ",
+        "two_in_row":    f"  2 alignés sans blocage  [{weights['two_in_row']}] : ",
+        "one_in_row":    f"  1 pièce en développ.   [{weights['one_in_row']}] : ",
+        "local_center":  f"  Case centrale morpion   [{weights['local_center']}] : ",
+        "freedom":       f"  Liberté de choix        [{weights['freedom']}] : ",
+    }
+    for key, prompt in labels.items():
+        raw = input(prompt).strip()
+        if raw:
+            try:
+                weights[key] = int(raw)
+            except ValueError:
+                pass
+    return weights
+
+
 def battle_mode():
     print("\n" + "=" * 40)
     print("     BATAILLE IA vs IA")
     print("=" * 40)
 
-    print("\nProfondeur IA-A (actuelle) :", AI_DEPTH)
+    print("\nProfondeur IA-A :", AI_DEPTH)
     try:
         depth_b = int(input("  Profondeur IA-B (ex: 2, 3, 4) : ").strip())
     except ValueError:
         depth_b = AI_DEPTH
 
+    weights_a = _ask_weights("IA-A")
+    weights_b = _ask_weights("IA-B")
+
     try:
-        nb_combats = int(input("  Nombre de combats (1 combat = 2 parties) : ").strip())
+        nb_combats = int(input("\n  Nombre de combats (1 combat = 2 parties) : ").strip())
     except ValueError:
         nb_combats = 3
 
     show_boards = ask_choice("  Afficher les grilles ? [o/n] : ", ["o", "n"]) == "o"
 
     print(f"\n  IA-A depth={AI_DEPTH}  vs  IA-B depth={depth_b}")
+    print(f"  Poids A : {weights_a}")
+    print(f"  Poids B : {weights_b}")
     print(f"  {nb_combats} combat(s) — {nb_combats * 2} partie(s) au total\n")
 
     total_pts_a = 0
@@ -175,21 +202,20 @@ def battle_mode():
 
         # Partie 1 : A commence (joue X)
         t0 = time.time()
-        w1, x1, o1 = _play_one_battle(AI_DEPTH, depth_b, a_starts=True)
+        w1, x1, o1 = _play_one_battle(AI_DEPTH, depth_b, a_starts=True, weights_a=weights_a, weights_b=weights_b)
         t1 = time.time() - t0
-        fastest1 = t1 < 60  # toujours vrai pour depth ≤ 4
 
-        pts_a1, pts_b1 = _points(w1, fastest1)
+        pts_a1, pts_b1 = _points(w1, True)
         total_pts_a += pts_a1
         total_pts_b += pts_b1
         print(f"  Partie 1 (A=X) : {_result_str(w1, x1, o1)}  [{t1:.1f}s]  pts A={pts_a1} B={pts_b1}")
 
         if show_boards:
-            _replay_and_show(AI_DEPTH, depth_b, a_starts=True)
+            _replay_and_show(AI_DEPTH, depth_b, a_starts=True, weights_a=weights_a, weights_b=weights_b)
 
         # Partie 2 : B commence (joue X)
         t0 = time.time()
-        w2, x2, o2 = _play_one_battle(AI_DEPTH, depth_b, a_starts=False)
+        w2, x2, o2 = _play_one_battle(AI_DEPTH, depth_b, a_starts=False, weights_a=weights_a, weights_b=weights_b)
         t2 = time.time() - t0
 
         pts_a2, pts_b2 = _points(w2, True)
@@ -198,7 +224,7 @@ def battle_mode():
         print(f"  Partie 2 (B=X) : {_result_str(w2, x2, o2)}  [{t2:.1f}s]  pts A={pts_a2} B={pts_b2}")
 
         if show_boards:
-            _replay_and_show(AI_DEPTH, depth_b, a_starts=False)
+            _replay_and_show(AI_DEPTH, depth_b, a_starts=False, weights_a=weights_a, weights_b=weights_b)
 
         # Stats de la partie
         for w in (w1, w2):
@@ -230,17 +256,16 @@ def _result_str(winner, x_wins, o_wins):
     return f"Nul (X:{x_wins} O:{o_wins})"
 
 
-def _replay_and_show(depth_a, depth_b, a_starts):
-    """Rejoue la partie en affichant chaque coup."""
+def _replay_and_show(depth_a, depth_b, a_starts, weights_a=None, weights_b=None):
     game = UltimateTTT()
     player_a = 1 if a_starts else 2
     print_board(game)
     while not game.is_game_over():
         if game.current_player == player_a:
-            row, col = get_best_move(game, depth=depth_a)
+            row, col = get_best_move(game, depth=depth_a, weights=weights_a)
             print(f"  IA-A joue : col {col+1} ligne {row+1}")
         else:
-            row, col = get_best_move(game, depth=depth_b)
+            row, col = get_best_move(game, depth=depth_b, weights=weights_b)
             print(f"  IA-B joue : col {col+1} ligne {row+1}")
         game.make_move(row, col)
         print_board(game)
