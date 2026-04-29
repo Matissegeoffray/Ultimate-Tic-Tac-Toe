@@ -5,8 +5,19 @@
 
 import copy
 import math
+import time
 
-AI_DEPTH = 3
+AI_DEPTH      = 3
+AI_TIME_LIMIT = 5.0  # secondes max par coup (iterative deepening)
+
+DEFAULT_WEIGHTS = {
+    "local_win":      29,
+    "global_center":   5,
+    "two_in_row":      7,
+    "one_in_row":      2,
+    "local_center":    2,
+    "freedom":         2,
+}
 
 
 # ============================================================
@@ -138,7 +149,7 @@ def print_board(game):
 # IA — MINIMAX + ALPHA-BETA + HEURISTIQUE
 # ============================================================
 
-def _score_lines(vals, player):
+def _score_lines(vals, player, w_two, w_one):
     opponent = 3 - player
     score = 0
     lines = [
@@ -151,36 +162,46 @@ def _score_lines(vals, player):
         p = cells.count(player)
         o = cells.count(opponent)
         if o == 0:
-            score += 3 if p == 2 else (1 if p == 1 else 0)
+            if p == 2:
+                score += w_two
+            elif p == 1:
+                score += w_one
         if p == 0:
-            score -= 3 if o == 2 else (1 if o == 1 else 0)
+            if o == 2:
+                score -= w_two
+            elif o == 1:
+                score -= w_one
     return score
 
 
-def heuristic(game, ai_player):
+def heuristic(game, ai_player, weights=None):
+    w = weights if weights is not None else DEFAULT_WEIGHTS
     opponent = 3 - ai_player
     score = 0
-    score += game.count_local_wins(ai_player) * 10
-    score -= game.count_local_wins(opponent) * 10
+    score += game.count_local_wins(ai_player) * w["local_win"]
+    score -= game.count_local_wins(opponent)  * w["local_win"]
     center = game.local_winners[1][1]
     if center == ai_player:
-        score += 5
+        score += w["global_center"]
     elif center == opponent:
-        score -= 5
+        score -= w["global_center"]
     for br in range(3):
         for bc in range(3):
             if game.local_winners[br][bc] != 0:
                 continue
             vals = game.get_local_values(br, bc)
-            score += _score_lines(vals, ai_player)
+            score += _score_lines(vals, ai_player, w["two_in_row"], w["one_in_row"])
             c = vals[1][1]
-            score += 1 if c == ai_player else (-1 if c == opponent else 0)
+            if c == ai_player:
+                score += w["local_center"]
+            elif c == opponent:
+                score -= w["local_center"]
     if game.active_board is None:
-        score += 2 if game.current_player == ai_player else -2
+        score += w["freedom"] if game.current_player == ai_player else -w["freedom"]
     return score
 
 
-def minimax(game, depth, alpha, beta, maximizing, ai_player):
+def minimax(game, depth, alpha, beta, maximizing, ai_player, weights=None):
     if game.is_game_over():
         w = game.global_winner
         if w == ai_player:
@@ -190,7 +211,7 @@ def minimax(game, depth, alpha, beta, maximizing, ai_player):
         else:
             return -10000
     if depth == 0:
-        return heuristic(game, ai_player)
+        return heuristic(game, ai_player, weights)
 
     moves = game.get_valid_moves()
     if maximizing:
@@ -198,7 +219,7 @@ def minimax(game, depth, alpha, beta, maximizing, ai_player):
         for row, col in moves:
             child = game.copy()
             child.make_move(row, col)
-            best = max(best, minimax(child, depth-1, alpha, beta, False, ai_player))
+            best = max(best, minimax(child, depth-1, alpha, beta, False, ai_player, weights))
             alpha = max(alpha, best)
             if beta <= alpha:
                 break
@@ -208,14 +229,14 @@ def minimax(game, depth, alpha, beta, maximizing, ai_player):
         for row, col in moves:
             child = game.copy()
             child.make_move(row, col)
-            best = min(best, minimax(child, depth-1, alpha, beta, True, ai_player))
+            best = min(best, minimax(child, depth-1, alpha, beta, True, ai_player, weights))
             beta = min(beta, best)
             if beta <= alpha:
                 break
         return best
 
 
-def get_best_move(game, depth=AI_DEPTH):
+def get_best_move(game, depth=AI_DEPTH, weights=None):
     ai_player = game.current_player
     moves = game.get_valid_moves()
     if len(moves) == 1:
@@ -225,11 +246,51 @@ def get_best_move(game, depth=AI_DEPTH):
     for row, col in moves:
         child = game.copy()
         child.make_move(row, col)
-        val = minimax(child, depth-1, alpha, beta, False, ai_player)
+        val = minimax(child, depth-1, alpha, beta, False, ai_player, weights)
         if val > best_val:
             best_val, best_move = val, (row, col)
         alpha = max(alpha, best_val)
     return best_move
+
+
+def get_best_move_timed(game, time_limit=AI_TIME_LIMIT, weights=None):
+    """Iterative deepening : explore depth=1, 2, 3... jusqu'à la limite de temps."""
+    ai_player = game.current_player
+    moves = game.get_valid_moves()
+
+    if len(moves) == 1:
+        return moves[0], 1
+
+    best_move = moves[0]
+    best_depth = 0
+    start = time.time()
+
+    for depth in range(1, 15):
+        t0 = time.time()
+
+        candidate = moves[0]
+        best_val = -math.inf
+        alpha, beta = -math.inf, math.inf
+
+        for row, col in moves:
+            child = game.copy()
+            child.make_move(row, col)
+            val = minimax(child, depth-1, alpha, beta, False, ai_player, weights)
+            if val > best_val:
+                best_val = val
+                candidate = (row, col)
+            alpha = max(alpha, best_val)
+
+        best_move = candidate
+        best_depth = depth
+
+        elapsed_this_depth = time.time() - t0
+        remaining = time_limit - (time.time() - start)
+
+        if remaining < elapsed_this_depth * 3:
+            break
+
+    return best_move, best_depth
 
 
 # ============================================================
@@ -286,8 +347,8 @@ def play_game():
         else:
             print(f"--- Tour de l'IA ({sym}) ---")
             print("  L'IA réfléchit...", end="", flush=True)
-            row, col = get_best_move(game)
-            print(f"\r  → L'IA joue   : colonne {col+1}, ligne {row+1}")
+            (row, col), depth_reached = get_best_move_timed(game)
+            print(f"\r  → L'IA joue   : colonne {col+1}, ligne {row+1}  (depth={depth_reached})")
         game.make_move(row, col)
         print_board(game)
 

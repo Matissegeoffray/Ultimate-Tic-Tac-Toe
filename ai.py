@@ -1,4 +1,5 @@
 import math
+import time
 
 
 # ---------------------------------------------------------------------------
@@ -6,11 +7,11 @@ import math
 # ---------------------------------------------------------------------------
 
 DEFAULT_WEIGHTS = {
-    "local_win":      10,  # morpion gagné
+    "local_win":      29,  # morpion gagné
     "global_center":   5,  # morpion central du plateau global
-    "two_in_row":      3,  # 2 pièces alignées sans blocage dans un morpion
-    "one_in_row":      1,  # 1 pièce en développement
-    "local_center":    1,  # case centrale d'un morpion
+    "two_in_row":      7,  # 2 pièces alignées sans blocage dans un morpion
+    "one_in_row":      2,  # 1 pièce en développement
+    "local_center":    2,  # case centrale d'un morpion
     "freedom":         2,  # liberté de choix (active_board=None)
 }
 
@@ -164,3 +165,48 @@ def get_best_move(game, depth=3, weights=None):
         alpha = max(alpha, best_val)
 
     return best_move
+
+
+def get_best_move_timed(game, time_limit=5.0, weights=None):
+    """
+    Iterative deepening : explore depth=1, 2, 3... jusqu'à la limite de temps.
+    Retourne (meilleur_coup, profondeur_atteinte).
+    """
+    ai_player = game.current_player
+    moves = game.get_valid_moves()
+
+    if len(moves) == 1:
+        return moves[0], 1
+
+    best_move = moves[0]
+    best_depth = 0
+    start = time.time()
+
+    for depth in range(1, 15):
+        t0 = time.time()
+
+        candidate = moves[0]
+        best_val = -math.inf
+        alpha = -math.inf
+        beta = math.inf
+
+        for row, col in moves:
+            child = game.copy()
+            child.make_move(row, col)
+            val = minimax(child, depth - 1, alpha, beta, False, ai_player, weights)
+            if val > best_val:
+                best_val = val
+                candidate = (row, col)
+            alpha = max(alpha, best_val)
+
+        best_move = candidate
+        best_depth = depth
+
+        elapsed_this_depth = time.time() - t0
+        remaining = time_limit - (time.time() - start)
+
+        # Si la profondeur suivante dépasserait probablement le temps restant, on s'arrête
+        if remaining < elapsed_this_depth * 3:
+            break
+
+    return best_move, best_depth
