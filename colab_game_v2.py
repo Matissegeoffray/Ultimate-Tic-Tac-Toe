@@ -1,21 +1,29 @@
 # ============================================================
-# ULTIMATE TIC TAC TOE — Version standalone Google Colab
+# ULTIMATE TIC TAC TOE — Version standalone Google Colab v2
+# Optimisations appliquées :
+#   [1] fast_clone()         — remplace copy.deepcopy (5-10× plus rapide)
+#   [2] Move ordering        — centre > coins > bords (meilleurs coupes alpha-beta)
+#   [3] Hard-limit minimax   — _Timeout levée à l'intérieur de la récursion
+#   [4] Heuristique asymét.  — défense 2× plus lourde, malus position dangereuse
 # Usage : copier ce fichier dans Colab puis exécuter la cellule
 # ============================================================
 
-import copy
 import math
 import time
 
 AI_TIME_LIMIT = 9.5  # secondes max par coup (marge de 0.5s sous la limite de 10s)
 
+# [OPTIM 4] Poids asymétriques : two_in_row_def > two_in_row_atk
 DEFAULT_WEIGHTS = {
-    "local_win":      29,
-    "global_center":   5,
-    "two_in_row":      7,
-    "one_in_row":      2,
-    "local_center":    2,
-    "freedom":         2,
+    "local_win":           29,
+    "global_center":        5,
+    "two_in_row_atk":       7,   # attaque : 2 pions propres alignés
+    "two_in_row_def":      14,   # défense : 2 pions adverses — 2× plus fort
+    "one_in_row":           2,
+    "local_center":         2,
+    "freedom":              2,
+    "center_gift_malus":    4,   # malus si l'adversaire est envoyé au centre global
+    "free_move_malus":      3,   # malus si l'adversaire a le choix libre
 }
 
 
@@ -95,8 +103,15 @@ class UltimateTTT:
     def count_local_wins(self, player):
         return sum(1 for br in range(3) for bc in range(3) if self.local_winners[br][bc] == player)
 
-    def copy(self):
-        return copy.deepcopy(self)
+    # [OPTIM 1] Copie manuelle par compréhension de listes — remplace copy.deepcopy
+    def fast_clone(self):
+        clone = UltimateTTT.__new__(UltimateTTT)
+        clone.board = [row[:] for row in self.board]
+        clone.local_winners = [row[:] for row in self.local_winners]
+        clone.active_board = self.active_board
+        clone.current_player = self.current_player
+        clone.global_winner = self.global_winner
+        return clone
 
 
 # ============================================================
@@ -145,10 +160,26 @@ def print_board(game):
 
 
 # ============================================================
-# IA — MINIMAX + ALPHA-BETA + HEURISTIQUE
+# IA — MINIMAX + ALPHA-BETA + HEURISTIQUE OPTIMISÉE
 # ============================================================
 
-def _score_lines(vals, player, w_two, w_one):
+# [OPTIM 2] Clé de tri : centre local (0) > coins (1) > bords (2)
+def _move_order_key(move):
+    r, c = move[0] % 3, move[1] % 3
+    if r == 1 and c == 1:
+        return 0
+    if r in (0, 2) and c in (0, 2):
+        return 1
+    return 2
+
+
+# [OPTIM 3] Exception pour couper la récursion instantanément dès le timeout
+class _Timeout(Exception):
+    pass
+
+
+# [OPTIM 4] Scores asymétriques : w_def > w_atk pour prioriser la défense
+def _score_lines(vals, player, w_atk, w_def, w_one):
     opponent = 3 - player
     score = 0
     lines = [
@@ -162,12 +193,12 @@ def _score_lines(vals, player, w_two, w_one):
         o = cells.count(opponent)
         if o == 0:
             if p == 2:
-                score += w_two
+                score += w_atk        # attaque : poids offensif standard
             elif p == 1:
                 score += w_one
         if p == 0:
             if o == 2:
-                score -= w_two
+                score -= w_def        # défense : poids renforcé (asymétrie)
             elif o == 1:
                 score -= w_one
     return score
@@ -189,24 +220,31 @@ def heuristic(game, ai_player, weights=None):
             if game.local_winners[br][bc] != 0:
                 continue
             vals = game.get_local_values(br, bc)
-            score += _score_lines(vals, ai_player, w["two_in_row"], w["one_in_row"])
+            # [OPTIM 4] Passe w_atk et w_def séparément
+            score += _score_lines(vals, ai_player,
+                                  w["two_in_row_atk"], w["two_in_row_def"],
+                                  w["one_in_row"])
             c = vals[1][1]
             if c == ai_player:
                 score += w["local_center"]
             elif c == opponent:
                 score -= w["local_center"]
+    # [OPTIM 4] Malus si l'adversaire a liberté de jeu ou est envoyé au centre global
     if game.active_board is None:
-        score += w["freedom"] if game.current_player == ai_player else -w["freedom"]
+        if game.current_player == opponent:
+            score -= w["free_move_malus"]   # l'adversaire choisit librement son sous-plateau
+        else:
+            score += w["freedom"]
+    elif game.active_board == (1, 1) and game.current_player == opponent:
+        score -= w["center_gift_malus"]     # on envoie l'adversaire sur le centre global
     return score
 
 
-class _Timeout(Exception):
-    pass
-
-
-def minimax(game, depth, alpha, beta, maximizing, ai_player, weights=None, deadline=None):
-    if deadline and time.time() >= deadline:
+def minimax(game, depth, alpha, beta, maximizing, ai_player, weights, deadline):
+    # [OPTIM 3] Vérification du temps au tout début de chaque appel récursif
+    if time.time() >= deadline:
         raise _Timeout()
+
     if game.is_game_over():
         w = game.global_winner
         if w == ai_player:
@@ -218,11 +256,13 @@ def minimax(game, depth, alpha, beta, maximizing, ai_player, weights=None, deadl
     if depth == 0:
         return heuristic(game, ai_player, weights)
 
-    moves = game.get_valid_moves()
+    # [OPTIM 2] Tri des coups : centre local d'abord pour maximiser les coupes
+    moves = sorted(game.get_valid_moves(), key=_move_order_key)
+
     if maximizing:
         best = -math.inf
         for row, col in moves:
-            child = game.copy()
+            child = game.fast_clone()   # [OPTIM 1] fast_clone au lieu de deepcopy
             child.make_move(row, col)
             best = max(best, minimax(child, depth-1, alpha, beta, False, ai_player, weights, deadline))
             alpha = max(alpha, best)
@@ -232,7 +272,7 @@ def minimax(game, depth, alpha, beta, maximizing, ai_player, weights=None, deadl
     else:
         best = math.inf
         for row, col in moves:
-            child = game.copy()
+            child = game.fast_clone()   # [OPTIM 1] fast_clone au lieu de deepcopy
             child.make_move(row, col)
             best = min(best, minimax(child, depth-1, alpha, beta, True, ai_player, weights, deadline))
             beta = min(beta, best)
@@ -242,13 +282,15 @@ def minimax(game, depth, alpha, beta, maximizing, ai_player, weights=None, deadl
 
 
 def get_best_move_timed(game, time_limit=AI_TIME_LIMIT, weights=None):
-    """Iterative deepening avec timeout strict : n'excède jamais time_limit."""
+    """Iterative deepening avec hard-limit strict géré par _Timeout."""
     ai_player = game.current_player
-    moves = game.get_valid_moves()
+    # [OPTIM 2] Move ordering dès la racine
+    moves = sorted(game.get_valid_moves(), key=_move_order_key)
 
     if len(moves) == 1:
         return moves[0], 1
 
+    w = weights if weights is not None else DEFAULT_WEIGHTS
     best_move = moves[0]
     best_depth = 0
     deadline = time.time() + time_limit
@@ -259,16 +301,18 @@ def get_best_move_timed(game, time_limit=AI_TIME_LIMIT, weights=None):
         alpha, beta = -math.inf, math.inf
         try:
             for row, col in moves:
-                child = game.copy()
+                child = game.fast_clone()   # [OPTIM 1]
                 child.make_move(row, col)
-                val = minimax(child, depth-1, alpha, beta, False, ai_player, weights, deadline)
+                val = minimax(child, depth-1, alpha, beta, False, ai_player, w, deadline)
                 if val > best_val:
                     best_val = val
                     candidate = (row, col)
                 alpha = max(alpha, best_val)
+            # Profondeur complète atteinte → on valide ce coup
             best_move = candidate
             best_depth = depth
         except _Timeout:
+            # [OPTIM 3] Profondeur interrompue → on conserve le coup de la profondeur précédente
             break
 
         if time.time() >= deadline:

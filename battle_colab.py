@@ -147,7 +147,12 @@ def _my_heuristic(game, ai_player):
         score += w["freedom"] if game.current_player == ai_player else -w["freedom"]
     return score
 
-def _my_minimax(game, depth, alpha, beta, maximizing, ai_player):
+class _MyTimeout(Exception):
+    pass
+
+def _my_minimax(game, depth, alpha, beta, maximizing, ai_player, deadline=None):
+    if deadline and time.time() >= deadline:
+        raise _MyTimeout()
     if game.is_game_over():
         w = game.global_winner
         if w == ai_player:   return 10000
@@ -161,7 +166,7 @@ def _my_minimax(game, depth, alpha, beta, maximizing, ai_player):
         for row, col in moves:
             child = game.copy()
             child.make_move(row, col)
-            best = max(best, _my_minimax(child, depth-1, alpha, beta, False, ai_player))
+            best = max(best, _my_minimax(child, depth-1, alpha, beta, False, ai_player, deadline))
             alpha = max(alpha, best)
             if beta <= alpha: break
         return best
@@ -170,38 +175,38 @@ def _my_minimax(game, depth, alpha, beta, maximizing, ai_player):
         for row, col in moves:
             child = game.copy()
             child.make_move(row, col)
-            best = min(best, _my_minimax(child, depth-1, alpha, beta, True, ai_player))
+            best = min(best, _my_minimax(child, depth-1, alpha, beta, True, ai_player, deadline))
             beta = min(beta, best)
             if beta <= alpha: break
         return best
 
-def my_get_best_move(game, time_limit=5.0):
-    """Iterative deepening avec limite de temps."""
+def my_get_best_move(game, time_limit=9.5):
+    """Iterative deepening avec timeout strict : n'excède jamais time_limit."""
     ai_player = game.current_player
     moves = game.get_valid_moves()
     if len(moves) == 1:
         return moves[0], 1
     best_move = moves[0]
     best_depth = 0
-    start = time.time()
+    deadline = time.time() + time_limit
     for depth in range(1, 15):
-        t0 = time.time()
         candidate = moves[0]
         best_val = -math.inf
         alpha, beta = -math.inf, math.inf
-        for row, col in moves:
-            child = game.copy()
-            child.make_move(row, col)
-            val = _my_minimax(child, depth-1, alpha, beta, False, ai_player)
-            if val > best_val:
-                best_val = val
-                candidate = (row, col)
-            alpha = max(alpha, best_val)
-        best_move = candidate
-        best_depth = depth
-        elapsed = time.time() - t0
-        remaining = time_limit - (time.time() - start)
-        if remaining < elapsed * 3:
+        try:
+            for row, col in moves:
+                child = game.copy()
+                child.make_move(row, col)
+                val = _my_minimax(child, depth-1, alpha, beta, False, ai_player, deadline)
+                if val > best_val:
+                    best_val = val
+                    candidate = (row, col)
+                alpha = max(alpha, best_val)
+            best_move = candidate
+            best_depth = depth
+        except _MyTimeout:
+            break
+        if time.time() >= deadline:
             break
     return best_move, best_depth
 
